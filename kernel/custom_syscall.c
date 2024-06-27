@@ -13,8 +13,7 @@ SYSCALL_DEFINE0(getmemutil)
 	si_meminfo(&i);
 	si_swapinfo(&i);
 
-	int mem_util = 1 - (i.freeram/i.totalram);
-
+	int mem_util = (10000*(i.totalram-i.freeram))/i.totalram;
 	if(mem_util<0){
 		return 0;
 	}
