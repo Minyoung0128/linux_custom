@@ -1,5 +1,4 @@
-NAME=csl
-
+NAME = xarray
 
 obj-m += ${NAME}.o
 
