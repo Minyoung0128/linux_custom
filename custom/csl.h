@@ -12,7 +12,9 @@
 
 #define DEV_SECTOR_NUM DEVICE_TOTAL_SIZE/SIZE_OF_SECTOR
 
+#define BACKUP_FILE_PATH "/dev/csl_backup"
 // 여기서 block device 관련 데이터를 다 다룸 
+
 struct csl_dev{
 	struct request_queue *queue;
 	struct gendisk *gdisk;
@@ -27,6 +29,10 @@ struct csl_dev{
 
 	// garbage collection을 위한 list 선언 
 	struct list_head list;
+
+	// XArray
+	struct xarray l2p_map;
+
 };
 
 struct l2b_item{
