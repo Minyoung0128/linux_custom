@@ -28,6 +28,11 @@ static void display_index(void)
 	void* ret;
 	struct l2b_item* data;
 
+	if(xa_empty(&dev->l2p_map)){
+		pr_info("CSL : THERE IS NO ALLOCATE SECTOR");
+		return;
+	}
+
 	pr_info("CSL : MAPPING INFO");
 	pr_info("------------------------------------------------");
 
@@ -35,7 +40,7 @@ static void display_index(void)
 	xa_for_each(&dev->l2p_map, lba, ret)
 	{
 		data = (struct l2b_item*) ret;
-		printk("LBA %d 		> 		PPN %d", data->lba, data->ppn);
+		printk("LBA %lu		> 		PPN %d", data->lba, data->ppn);
 	}
 	
 	pr_info("------------------------------------------------");
@@ -51,17 +56,17 @@ static int read_from_file(char* filename, void* data, size_t size)
 	file = filp_open(filename, O_RDONLY, 0644);
 
 	if(IS_ERR(file)|| file == NULL){
-		pr_warn("Fail to open File");
-		return -1;
+		pr_warn(FILE_OPEN_ERROR_MSG);
+		return FAIL_EXIT;
 	}
 		
 	// 여기는 파일이 있는 상태
 	if(kernel_read(file, data, size, &pos) < 0){
-		pr_warn("Fail to Read File");
-		return -1;
+		pr_warn(FILE_READ_ERROR_MSG);
+		return FAIL_EXIT;
 	}
 
-	return 0;
+	return SUCCESS_EXIT;
 }
 
 
@@ -70,17 +75,16 @@ static int read_from_file(char* filename, void* data, size_t size)
 // > 없으면 각각 initialize만 해서 dev에 넣어주기 
 
 static void csl_restore(struct csl_dev *dev){
-	struct file *file;
-	loff_t pos = 0;
-	int ret;
 	int i;
 
-	unsigned int header_size;
-	unsigned long xa_entry_num = 0;
-	unsigned long gc_entry_num;
-	unsigned int *xa_ptr;
-	unsigned int *gc_ptr;
+	unsigned int xa_entry_num = 0;
+	unsigned int gc_entry_num;
+	unsigned int *metadata_ptr;
+	u8 *data_ptr;
+
 	unsigned int offset;
+
+	struct list_item* item;
 
 	u8 *total_data;
 	unsigned int total_data_size;
@@ -89,53 +93,51 @@ static void csl_restore(struct csl_dev *dev){
 
 	// 1. offset, Xarray, list entry의 개수를 가져오고 전체 데이터를 읽어옴
 	
-	header_size = sizeof(unsigned int) + sizeof(xa_entry_num) + sizeof(gc_entry_num);
-	void* header_data = kmalloc(header_size, GFP_KERNEL);;
+	void* header_data = kmalloc(BACKUP_HEADER_SIZE, GFP_KERNEL);;
 	
-	if(header_data < 0){
+	if(IS_ERR(header_data)){
 		pr_warn("MALLOC FAIL");
 		goto nofile;
 	}
 
-	if(read_from_file(BACKUP_FILE_PATH, header_data, header_size)<0){
-		printk("READ FAIL");
+	if(read_from_file(BACKUP_FILE_PATH, header_data, BACKUP_HEADER_SIZE)<0){
+		pr_warn(FILE_READ_ERROR_MSG);
 		goto nofile;
 	}
 
 	offset = *(unsigned int*)header_data;
 	dev->offset = offset;
-	printk("restore offset %d",dev->offset);
-	xa_entry_num = *(unsigned long*)(header_data +sizeof(unsigned int) );
-	gc_entry_num = *(unsigned long*)(header_data + sizeof(unsigned int) + sizeof(xa_entry_num));
-	
-	pr_info("There are %d XArray Entry, %d GC Entry", xa_entry_num, gc_entry_num);
 
-	total_data_size = sizeof(unsigned int)+sizeof(xa_entry_num) + (xa_entry_num * sizeof(unsigned long)) + sizeof(gc_entry_num) + (gc_entry_num * sizeof(unsigned int)) + DEVICE_TOTAL_SIZE;
+	xa_entry_num = *(unsigned int*)(header_data + OFFSET_SIZE);
+	gc_entry_num = *(unsigned int*)(header_data + OFFSET_SIZE + sizeof(xa_entry_num));
+	
+	total_data_size = BACKUP_HEADER_SIZE + (xa_entry_num * XA_ENTRY_SIZE) + (gc_entry_num * GC_ENTRY_SIZE) + DEVICE_TOTAL_SIZE;
 	
 	total_data = kmalloc(total_data_size, GFP_KERNEL);
 
-	if(read_from_file(BACKUP_FILE_PATH, total_data, total_data_size)<0){
+	if(read_from_file(BACKUP_FILE_PATH, total_data, total_data_size) < 0){
+		pr_warn(FILE_READ_ERROR_MSG);
 		goto nofile;
 	}
 	
 	pr_info("There are %d XArray Entry, %d GC Entry > total data size is [%d] bytes", xa_entry_num, gc_entry_num, total_data_size);
 
 	// 2. Xarray entry를 가져와 XArray에 저장
-	unsigned long lba; 
-	unsigned int ppn;
+	
 	struct l2b_item* l2b_item;
 
 	pr_info("Start restore XArray data!");
 
-	xa_ptr = (unsigned int*)(total_data +sizeof(unsigned int)+ sizeof(xa_entry_num) + sizeof(gc_entry_num));
+	metadata_ptr = (unsigned int*)(total_data + BACKUP_HEADER_SIZE);
+	
 	xa_init(&dev->l2p_map);
 
 	for(i = 0; i < xa_entry_num; i++){
 		l2b_item = kmalloc(sizeof(struct l2b_item), GFP_KERNEL);
-		l2b_item->lba = (unsigned long)(*xa_ptr++);
-		l2b_item->ppn = *xa_ptr++;
+		l2b_item->lba = (unsigned long)(*metadata_ptr++);
+		l2b_item->ppn = *metadata_ptr++;
 
-		printk("XA lba : %d | ppn : %d",l2b_item->lba, l2b_item->ppn);
+		printk("XA lba : %lu | ppn : %d",l2b_item->lba, l2b_item->ppn);
 		xa_store(&dev->l2p_map, l2b_item->lba, (void*)l2b_item, GFP_KERNEL);
 	}
 
@@ -146,24 +148,24 @@ static void csl_restore(struct csl_dev *dev){
 	pr_info("Start restore Garbage collection data!");
 
 	INIT_LIST_HEAD(&dev->list);
-	struct list_item* item;
 	for(i = 0; i < gc_entry_num; i++){
-		item=kmalloc(sizeof(struct list_item), GFP_KERNEL);
-		item->sector = *xa_ptr++;
+		item = kmalloc(sizeof(struct list_item), GFP_KERNEL);
+		item->sector = *metadata_ptr++;
 		list_add_tail(&item->list_head, &dev->list);
-		printk("gc data : %d",item->sector);
+		// printk("gc data : %d",item->sector);
 	}
 	
 	pr_info("Complete to restore Garbage Collection data!");
 
-	void* data_ptr = (u8 *)xa_ptr;
+	data_ptr = (u8*)metadata_ptr;
 	memcpy(&data, data_ptr, DEVICE_TOTAL_SIZE);
 	
 	pr_info("CSL : RESTORE COMPLETE");
+	display_index();
 	return;
 
 nofile:
-	pr_warn("THERE IS NO BACK UP FILE");
+	pr_warn(BACKUP_FAIL_MSG);
 	xa_init(&dev->l2p_map);
 	INIT_LIST_HEAD(&dev->list);
 	return;
@@ -173,19 +175,19 @@ nofile:
 static int write_to_file(const char *filename, const void *data, size_t size) {
     struct file *file;
     loff_t pos = 0;
-    int ret;
-	pr_info("CSL : Write file with %s",filename);
 
     file = filp_open(filename, O_WRONLY | O_CREAT, 0644);
     if (IS_ERR(file)) {
-        return PTR_ERR(file);
+		pr_warn(FILE_OPEN_ERROR_MSG);
+        return FAIL_EXIT;
     }
 
-    ret = kernel_write(file, data, size, &pos);
+    if(kernel_write(file, data, size, &pos) < 0){
+		pr_warn(FILE_WRITE_ERROR_MSG);
+		return FAIL_EXIT;
+	}
 
-	pr_info("CSL : Backup Complete with %s",filename);
-
-    return ret;
+    return SUCCESS_EXIT;
 }
 
 static void csl_backup(void)
@@ -193,65 +195,81 @@ static void csl_backup(void)
 	
 	pr_info("CSL : BACKUP START");
 	display_index();
-	unsigned long xa_entry_num = 0;
-	unsigned long gc_entry_num;
-	unsigned int *gc_data;
+	unsigned int xa_entry_num=0;
+	unsigned int gc_entry_num=0;
+	unsigned int *metadata_ptr;
+
+	void *data_ptr;
+	struct list_item *litem;
+	struct l2b_item* xa_item;
 
 	u8 *total_data;
 	unsigned int total_data_size = 0;
 
 	// 1. XArray의 mapping data 개수 세오기
-	void* ret;
+	void* xa_ret;
 	unsigned long idx;
-	xa_for_each(&dev->l2p_map, idx, ret){
-		xa_entry_num++;
+	if(!xa_empty(&dev->l2p_map)){
+		xa_for_each(&dev->l2p_map, idx, xa_ret){
+			xa_entry_num++;
+		}
 	}
-
+	
 	// 2. Garbage Collection 개수 count
-	gc_entry_num = list_count_nodes(&dev->list);
-
+	if(!list_empty(&dev->list)){
+		gc_entry_num = list_count_nodes(&dev->list);
+	}
+	
+	
 	// 3. 배열 생성
-	total_data_size = sizeof(unsigned int)+sizeof(xa_entry_num) + (xa_entry_num * 2 * sizeof(unsigned int)) + sizeof(gc_entry_num) + (gc_entry_num * sizeof(unsigned int)) + DEVICE_TOTAL_SIZE;
+	total_data_size = BACKUP_HEADER_SIZE + (xa_entry_num * XA_ENTRY_SIZE) + (gc_entry_num * GC_ENTRY_SIZE) + DEVICE_TOTAL_SIZE;
 	total_data = kzalloc(total_data_size, GFP_KERNEL);
-
+	printk("xa : %d, list : %d, total size : %d",xa_entry_num, gc_entry_num,total_data_size);
+	
+	if(IS_ERR(total_data) || total_data < 0 || total_data == NULL){
+		pr_info("MALLOC ERROr");
+		return;
+	}
+	
 	// 3-1. header 정보 넣어주기
-	memcpy(total_data, &dev->offset, sizeof(unsigned int));
-	printk("backup offset %d",dev->offset);
-	memcpy(total_data + sizeof(unsigned int), &xa_entry_num, sizeof(xa_entry_num));
-	memcpy(total_data + sizeof(unsigned int) + sizeof(xa_entry_num), &gc_entry_num, sizeof(gc_entry_num));
+
+	*total_data++ = dev->offset;
+	*total_data++ = xa_entry_num;
+	*total_data++ = gc_entry_num;
+
+	memcpy(total_data, &dev->offset, OFFSET_SIZE);
+	memcpy(total_data + OFFSET_SIZE, &xa_entry_num, sizeof(xa_entry_num));
+	memcpy(total_data + OFFSET_SIZE + sizeof(xa_entry_num), &gc_entry_num, sizeof(gc_entry_num));
+	
+	printk("make header");
 
 	// 4. XArray 데이터 복사해오기 
-	unsigned int *xa_ptr = (unsigned int *)(total_data +sizeof(unsigned int)+ sizeof(xa_entry_num) + sizeof(gc_entry_num));
-	struct l2b_item *item;
-	unsigned int lba;
-	unsigned int ppn;
+	metadata_ptr = (unsigned int *)(total_data + BACKUP_HEADER_SIZE);
 
-	xa_for_each(&dev->l2p_map, idx, ret){
-		item = (struct l2b_item *)ret;
-		lba = (unsigned int)item->lba;
-		ppn = item->ppn;
-		*xa_ptr++ = lba;
-		*xa_ptr++ = ppn;
-		
-		pr_info("store xarray with lba %d > ppn %d", lba, ppn);
-
+	xa_for_each(&dev->l2p_map, idx, xa_ret){
+		xa_item = (struct l2b_item*)xa_ret;
+		*metadata_ptr++ = (unsigned int)xa_item->lba;;
+		*metadata_ptr++ = xa_item->ppn;
+		pr_info("store xarray with lba %lu > ppn %d", xa_item->lba, xa_item->ppn);
 	}
+	
+	printk("get xa data");
 
 	// 5. GC Linked List 데이터 복사 
-	gc_data = (unsigned int*)(total_data + sizeof(unsigned int)+ sizeof(xa_entry_num) + xa_entry_num * 2 *sizeof(unsigned int) + sizeof(gc_entry_num));
-	struct list_item *litem;
+	metadata_ptr = (unsigned int*)(total_data + BACKUP_HEADER_SIZE + xa_entry_num * XA_ENTRY_SIZE);
+	
 	list_for_each_entry(litem, &dev->list, list_head){
-		*gc_data++ = litem->sector;
-		
+		*metadata_ptr++ = litem->sector;
 		pr_info("store gc data %d", litem->sector);
 	}
-
-	void *data_ptr = total_data +sizeof(unsigned int)+ sizeof(xa_entry_num) + (xa_entry_num * sizeof(unsigned long)) +
-                     sizeof(gc_entry_num) + (gc_entry_num * sizeof(unsigned int));
+	
+	printk("get list data");
+	data_ptr = total_data + BACKUP_HEADER_SIZE + (xa_entry_num * XA_ENTRY_SIZE) + (gc_entry_num * GC_ENTRY_SIZE);
     memcpy(data_ptr, &data, DEVICE_TOTAL_SIZE);
 
 	if (write_to_file(BACKUP_FILE_PATH, total_data, total_data_size) < 0) {
-        pr_err("Failed to write backup data to file\n");
+        pr_warn(FILE_WRITE_ERROR_MSG);
+		return;
     }
 
 	pr_info("CSL : BACKUP COMPLETE");
@@ -272,7 +290,7 @@ static uint csl_gc(void)
 	{
 		entry = list_first_entry(&dev->list, struct list_item, list_head);
 		list_del(&entry->list_head);
-		
+	
 		// pr_info("CSL : %d sector collected", entry->sector);
 		return entry->sector;
 	}
@@ -318,7 +336,6 @@ static void csl_write(uint ppn, void* buf, uint num_sec){
 		// garbage collection 수행
 		int ppn_new = csl_gc();
 		if(ppn_new < 0){
-			pr_warn("There is No Space in Device!");
 			return;
 		}
 		memcpy(&data[ppn_new*SECTOR_SIZE], buf, nbytes);
@@ -358,7 +375,7 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 		if(!ret){
 			// address_val이 NULL > 이미 쓰여있는 데이터가 없으므로 invalidate하지 않아도 괜찮음
 			l2b_item = kmalloc(sizeof(struct l2b_item), GFP_KERNEL);
-
+			
 			l2b_item->lba = start_sec;
 			l2b_item->ppn = dev->offset;
 			
@@ -410,8 +427,6 @@ static void csl_get_request(struct request *rq)
 	int isWrite = rq_data_dir(rq);
 
 	sector_t start_sector = blk_rq_pos(rq);
-	unsigned int sector_len = blk_rq_sectors(rq);
-	unsigned int byte_len = blk_rq_bytes(rq);
 	
 	// pr_info("CSL : Request | isWrite = [%d] | start_sector = [%d] | sector_length : [%d] | byte_length : [%d]",isWrite,start_sector, sector_len, byte_len);
 
@@ -422,8 +437,9 @@ static void csl_get_request(struct request *rq)
 
 	rq_for_each_segment(bvec, rq, iter){
 		
-		// request의 bio_vec을 가져와 파싱해줌.
-		unsigned int num_sector = blk_rq_sectors(rq);
+		// request의 bio_vec을 가져와 파싱해줌
+		// rq OR rq_cur?
+		unsigned int num_sector = blk_rq_sectors(rq); 
 
 		buffer = page_address(bvec.bv_page)+bvec.bv_offset;
 
@@ -447,9 +463,9 @@ static blk_status_t csl_enqueue(struct blk_mq_hw_ctx *ctx, const struct blk_mq_q
 
 static struct block_device_operations csl_fops = {
 	.owner = THIS_MODULE,
-	// .open = csl_open,
-	// .release = csl_release,
-	// .ioctl = csl_ioctl
+	.open = csl_open,
+	.release = csl_release,
+	.ioctl = csl_ioctl
 };
 
 
@@ -466,13 +482,10 @@ static struct csl_dev *csl_alloc(void)
 
 	int error;
 
-	printk(KERN_INFO "CSL : CSL DEVICE START TO ALLOCATE");
-
 	mydev = kzalloc(sizeof(struct csl_dev), GFP_KERNEL); // kzmalloc로 커널 공간에 메모리 할당
 	// GFP_KERNEL : 흔히 사용되는 flag로 메모리가 충분하지 않으면 sleep 상태가 된다. 
 
 	if(!mydev){
-		printk(KERN_WARNING "CSL : FAIL TO MALLOC TO DEVICE STRUCT!");
 		return NULL;
 	}
 
@@ -481,12 +494,9 @@ static struct csl_dev *csl_alloc(void)
 	// printk(KERN_INFO "CSL : CSL DEVICE INIT LIST HEAD - FIN");
 	// xa_init(&mydev->l2p_map);
 
-	printk(KERN_INFO "CSL : CSL DEVICE INIT LOCK");
 	spin_lock_init(&mydev->csl_lock);
-	printk(KERN_INFO "CSL : CSL DEVICE INIT LOCK - FIN");
 
 	// 2. tag set 할당
-	printk(KERN_INFO "CSL : START ALLOCATE TAG SET");
 
 	mydev->tag_set.ops = &csl_mq_ops;
 	mydev->tag_set.nr_hw_queues = 1;
@@ -499,49 +509,38 @@ static struct csl_dev *csl_alloc(void)
 	error = blk_mq_alloc_tag_set(&mydev->tag_set);
 
 	if(error){
-		printk(KERN_WARNING "CSL : FAIL TO ALLCOCATE TAG SET");
 		kfree(mydev);
 		return NULL;
 	}
 
-	printk(KERN_INFO "CSL : FINISH ALLOCATE TAG SET");
-
 	// 3. gendisk 할당
-	printk(KERN_INFO "CSL : START ALLOCATE DISK");
 	
 	disk = blk_mq_alloc_disk(&mydev->tag_set, &queue_limit, mydev->queue);
 	
 	disk->major = CSL_MAJOR;
 	disk->fops = &csl_fops;
-	disk->first_minor = 0;
-	disk->minors = 2;
+	disk->first_minor = DEV_FIRST_MINOR;
+	disk->minors = DEV_MINORS;
 	disk->private_data = mydev;
 
 	snprintf(disk->disk_name, 32, "CSL");
 
 	if(IS_ERR(disk)){
-		printk(KERN_WARNING "CSL : FAIL TO ALLCOCATE DISK");
 		blk_mq_free_tag_set(&mydev->tag_set);
 		kfree(mydev);
 		return NULL;
 	}
-	printk(KERN_INFO "CSL : FINISH ALLOCATE DISK");
 
 	mydev->gdisk = disk;
 	mydev->queue = disk->queue;
 
-	
-	printk(KERN_INFO "CSL : START ADD DISK");
-	error = add_disk(disk); // 여기에서 뭔가 warning이 발생
+	error = add_disk(disk); 
 	if(error){
-		printk(KERN_WARNING "CSL : FAIL TO ADD DISK with %d",error);
 		blk_mq_free_tag_set(&mydev->tag_set);
 		kfree(mydev);
 		return NULL;
 	}
 	set_capacity(mydev->gdisk, DEV_SECTOR_NUM);
-	
-	printk(KERN_INFO "CSL : FINISH ADD DISK");
 
 	return mydev;
 }
@@ -577,7 +576,6 @@ static int __init csl_init(void)
 	csl_restore(mydev);
 
 	dev = mydev;
-	display_index();
 	
 	printk(KERN_INFO "DEVICE : CSL is successfully initialized with major number %d\n",CSL_MAJOR);
 	return 0;

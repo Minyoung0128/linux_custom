@@ -5,14 +5,38 @@
 #include <linux/list.h>
 
 #define DEV_NAME "CSL"
-#define DEVICE_TOTAL_SIZE 16*1024*1024 // 16MB
+#define DEVICE_TOTAL_SIZE 1024*1024 // 16MB
 #define QUEUE_LIMIT 16
+#define DEV_FIRST_MINOR 0
+#define DEV_MINORS 16
 
 #define SIZE_OF_SECTOR 512
-
 #define DEV_SECTOR_NUM DEVICE_TOTAL_SIZE/SIZE_OF_SECTOR
-
 #define BACKUP_FILE_PATH "/dev/csl_backup"
+
+/*
+* RETURN VALUE 
+*/
+#define SUCCESS_EXIT 0
+#define FAIL_EXIT -1
+
+/*
+* DEVICE BACKUP CONSTANT
+*/
+#define BACKUP_HEADER_SIZE 3 * sizeof(unsigned int)
+#define OFFSET_SIZE sizeof(unsigned int)
+#define XA_ENTRY_SIZE 2 * sizeof(unsigned int)
+#define GC_ENTRY_SIZE sizeof(unsigned int)
+
+/*
+* ERROR MSG
+*/
+#define FILE_OPEN_ERROR_MSG "CSL : FAIL TO OPEN FILE"
+#define FILE_READ_ERROR_MSG "CSL : FAIL TO READ FILE"
+#define FILE_WRITE_ERROR_MSG "CSL : FAIL TO WRITE FILE"
+
+#define BACKUP_FAIL_MSG "CSL : FAIL TO BACK UP CSL"
+
 // 여기서 block device 관련 데이터를 다 다룸 
 
 struct csl_dev{
