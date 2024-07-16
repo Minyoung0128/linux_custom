@@ -5,7 +5,7 @@
 #include <linux/list.h>
 
 #define DEV_NAME "CSL"
-#define DEVICE_TOTAL_SIZE 1024*1024 // 16MB
+#define DEVICE_TOTAL_SIZE 16*1024*1024 // 16MB
 #define QUEUE_LIMIT 16
 #define DEV_FIRST_MINOR 0
 #define DEV_MINORS 16

@@ -113,7 +113,7 @@ static void csl_restore(struct csl_dev *dev){
 	
 	total_data_size = BACKUP_HEADER_SIZE + (xa_entry_num * XA_ENTRY_SIZE) + (gc_entry_num * GC_ENTRY_SIZE) + DEVICE_TOTAL_SIZE;
 	
-	total_data = kmalloc(total_data_size, GFP_KERNEL);
+	total_data = vmalloc(total_data_size);
 
 	if(read_from_file(BACKUP_FILE_PATH, total_data, total_data_size) < 0){
 		pr_warn(FILE_READ_ERROR_MSG);
@@ -160,8 +160,9 @@ static void csl_restore(struct csl_dev *dev){
 	data_ptr = (u8*)metadata_ptr;
 	memcpy(&data, data_ptr, DEVICE_TOTAL_SIZE);
 	
-	pr_info("CSL : RESTORE COMPLETE");
+	vfree(total_data);
 	display_index();
+	pr_info("CSL : RESTORE COMPLETE");
 	return;
 
 nofile:
@@ -223,7 +224,7 @@ static void csl_backup(void)
 	
 	// 3. 배열 생성
 	total_data_size = BACKUP_HEADER_SIZE + (xa_entry_num * XA_ENTRY_SIZE) + (gc_entry_num * GC_ENTRY_SIZE) + DEVICE_TOTAL_SIZE;
-	total_data = kzalloc(total_data_size, GFP_KERNEL);
+	total_data = vmalloc(total_data_size);
 	printk("xa : %d, list : %d, total size : %d",xa_entry_num, gc_entry_num,total_data_size);
 	
 	if(IS_ERR(total_data) || total_data < 0 || total_data == NULL){
@@ -272,10 +273,10 @@ static void csl_backup(void)
 		return;
     }
 
+	vfree(total_data);
+
 	pr_info("CSL : BACKUP COMPLETE");
 	pr_info("There are %d XArray Entry, %d GC Entry > total data size is [%d] bytes", xa_entry_num, gc_entry_num, total_data_size);
-
-    kfree(total_data);
 }
 
 static uint csl_gc(void)
@@ -383,8 +384,8 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 			xa_store(&dev->l2p_map, l2b_item->lba, (void*)l2b_item, GFP_KERNEL);
 
 			dev->offset+=num_sec;
-
-			// printk(KERN_INFO "CLS : Start write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
+	
+			pr_info("CLS : Start write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
 			csl_write(l2b_item->ppn, buffer, num_sec);
 			// printk(KERN_INFO "CLS : Finish Write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
 			// display_index();
@@ -399,7 +400,7 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 			
 			dev->offset+=num_sec;
 			
-			// printk(KERN_INFO "CLS : Start write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
+			pr_info("CLS : Start write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
 			csl_write(l2b_item->ppn, buffer, num_sec);
 			// printk(KERN_INFO "CLS : Finish Write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
 			// display_index();
@@ -410,7 +411,8 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 		pr_info("CSL : Start to Read!");
 		ret = xa_load(&dev->l2p_map, start_sec);
 		if(!ret){
-			printk(KERN_WARNING "PAGE FAULT!");
+			
+			pr_warn("CSL : PAGE FAULT with sector num : %d",start_sec);
 			return;
 		}
 		l2b_item = (struct l2b_item*) ret;
@@ -439,7 +441,7 @@ static void csl_get_request(struct request *rq)
 		
 		// request의 bio_vec을 가져와 파싱해줌
 		// rq OR rq_cur?
-		unsigned int num_sector = blk_rq_sectors(rq); 
+		unsigned int num_sector = blk_rq_cur_sectors(rq); 
 
 		buffer = page_address(bvec.bv_page)+bvec.bv_offset;
 
@@ -573,9 +575,10 @@ static int __init csl_init(void)
 		return -1;
 	}
 	
-	csl_restore(mydev);
-
+	
 	dev = mydev;
+
+	csl_restore(dev);
 	
 	printk(KERN_INFO "DEVICE : CSL is successfully initialized with major number %d\n",CSL_MAJOR);
 	return 0;

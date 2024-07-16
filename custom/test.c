@@ -45,28 +45,8 @@ int main()
         printf("Read from offset %ld:\n%s\n", off, buf);
     }
 
-    // offset 초기화
-    // if(lseek(fd, 0, SEEK_SET)<0){
-    //     perror("lseeck error");
-    //     return 0;
-    // }
-
-    // if(write(fd, "Say Hello To world Again", strlen("Say Hello To world Again"))<0){
-    //     perror("Write error");
-    //     return 0;   
-    // }
-    // if(lseek(fd, off, SEEK_SET)<0){
-    //     perror("lseeck error");
-    //     return 0;
-    // }
-    // if (read(fd, buf, BUF_LEN) < 0) {
-    //     perror("read error");
-    // } else {
-    //     printf("Read from offset %ld:\n%s\n", off, buf);
-    // }
-
-    printf("Test Complete\n");
+        printf("Test Complete\n");
     
 
-    return 0;
+    return 1;
 }
