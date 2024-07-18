@@ -35,27 +35,12 @@ int main()
 
         snprintf(buf, 100, "WRITE TEST with SECTOR NUM %d\n", i);
 
-        printf("write to %d : %s",i, buf);
-
         if(write(fd, buf, sizeof(buf))<0){
             perror("Write Error");
             return 0;
         }
 
-        if (lseek(fd, off, SEEK_SET) < 0) {
-                perror("lseek error");
-                return 1;
-        }
-
-        memset(buf, 0, sizeof(buf)); // 버퍼 초기화
-        if (read(fd, buf, sizeof(buf)) < 0) {
-            perror("read error");
-            return 1;
-        }
-
-        printf("Read from sector %d: %s\n", i, buf);
- 
-    }
+   }
 
     close(fd);
     

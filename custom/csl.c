@@ -89,14 +89,14 @@ static void csl_restore(struct csl_dev *dev){
 	u8 *total_data;
 	unsigned int total_data_size;
 
-	pr_info("CSL : RESTORE START");
+	//pr_info("CSL : RESTORE START");
 
 	// 1. offset, Xarray, list entry의 개수를 가져오고 전체 데이터를 읽어옴
 	
 	void* header_data = kmalloc(BACKUP_HEADER_SIZE, GFP_KERNEL);;
 	
-	if(IS_ERR(header_data)){
-		pr_warn("MALLOC FAIL");
+	if(IS_ERR(header_data) || header_data == NULL){
+		pr_warn();
 		goto nofile;
 	}
 
@@ -126,7 +126,7 @@ static void csl_restore(struct csl_dev *dev){
 	
 	struct l2b_item* l2b_item;
 
-	pr_info("Start restore XArray data!");
+	// pr_info("Start restore XArray data!");
 
 	metadata_ptr = (unsigned int*)(total_data + BACKUP_HEADER_SIZE);
 	
@@ -134,6 +134,10 @@ static void csl_restore(struct csl_dev *dev){
 
 	for(i = 0; i < xa_entry_num; i++){
 		l2b_item = kmalloc(sizeof(struct l2b_item), GFP_KERNEL);
+		if(IS_ERR(l2b_item) || l2b_item == NULL){
+			pr_warn();
+			goto nofile;
+		}
 		l2b_item->lba = (unsigned long)(*metadata_ptr++);
 		l2b_item->ppn = *metadata_ptr++;
 
@@ -141,21 +145,25 @@ static void csl_restore(struct csl_dev *dev){
 		xa_store(&dev->l2p_map, l2b_item->lba, (void*)l2b_item, GFP_KERNEL);
 	}
 
-	pr_info("Complete to back up XArray data!");
+	//pr_info("Complete to back up XArray data!");
 
 	// 3. list index 복원
 	
-	pr_info("Start restore Garbage collection data!");
+	// pr_info("Start restore Garbage collection data!");
 
 	INIT_LIST_HEAD(&dev->list);
 	for(i = 0; i < gc_entry_num; i++){
 		item = kmalloc(sizeof(struct list_item), GFP_KERNEL);
+		if(IS_ERR(item) || item == NULL){
+			pr_warn();
+			goto nofile;
+		}
 		item->sector = *metadata_ptr++;
 		list_add_tail(&item->list_head, &dev->list);
 		// printk("gc data : %d",item->sector);
 	}
 	
-	pr_info("Complete to restore Garbage Collection data!");
+	//pr_info("Complete to restore Garbage Collection data!");
 
 	data_ptr = (u8*)metadata_ptr;
 	memcpy(&data, data_ptr, DEVICE_TOTAL_SIZE);
@@ -194,7 +202,7 @@ static int write_to_file(const char *filename, const void *data, size_t size) {
 static void csl_backup(void)
 {
 	
-	pr_info("CSL : BACKUP START");
+	//pr_info("CSL : BACKUP START");
 	display_index();
 	unsigned int xa_entry_num=0;
 	unsigned int gc_entry_num=0;
@@ -234,10 +242,6 @@ static void csl_backup(void)
 	
 	// 3-1. header 정보 넣어주기
 
-	*total_data++ = dev->offset;
-	*total_data++ = xa_entry_num;
-	*total_data++ = gc_entry_num;
-
 	memcpy(total_data, &dev->offset, OFFSET_SIZE);
 	memcpy(total_data + OFFSET_SIZE, &xa_entry_num, sizeof(xa_entry_num));
 	memcpy(total_data + OFFSET_SIZE + sizeof(xa_entry_num), &gc_entry_num, sizeof(gc_entry_num));
@@ -251,7 +255,7 @@ static void csl_backup(void)
 		xa_item = (struct l2b_item*)xa_ret;
 		*metadata_ptr++ = (unsigned int)xa_item->lba;;
 		*metadata_ptr++ = xa_item->ppn;
-		pr_info("store xarray with lba %lu > ppn %d", xa_item->lba, xa_item->ppn);
+		//pr_info("store xarray with lba %lu > ppn %d", xa_item->lba, xa_item->ppn);
 	}
 	
 	printk("get xa data");
@@ -261,7 +265,7 @@ static void csl_backup(void)
 	
 	list_for_each_entry(litem, &dev->list, list_head){
 		*metadata_ptr++ = litem->sector;
-		pr_info("store gc data %d", litem->sector);
+		//pr_info("store gc data %d", litem->sector);
 	}
 	
 	printk("get list data");
@@ -286,35 +290,41 @@ static uint csl_gc(void)
 
 	struct list_item *entry;
 
-	// pr_info("CSL : Start Garbage Collection");
+	//pr_info("CSL : Start Garbage Collection");
 	if(!list_empty(&dev->list))
 	{
+		unsigned int ppn_new;
 		entry = list_first_entry(&dev->list, struct list_item, list_head);
+		ppn_new = entry->sector;
 		list_del(&entry->list_head);
 	
-		// pr_info("CSL : %d sector collected", entry->sector);
-		return entry->sector;
+		//pr_info("CSL : %d sector collected", entry->sector);
+		
+		return ppn_new;
 	}
 
 	return -1;
 }
 
-static void csl_invalidate(uint ppn)
+static void csl_invalidate(unsigned int ppn)
 {
 	struct list_item *item;
 
-	// pr_info("CSL : Invalidata ppn [%d]", ppn);
-	item = kmalloc(sizeof(struct list_item*), GFP_KERNEL);
+	item = kmalloc(sizeof(struct list_item), GFP_KERNEL);
 
-	if(!item) {
+	if(IS_ERR(item) || item == NULL) {
 		pr_warn("CSL : Fail To Allocate list item !");
 		return;
-		}
+	}
 
 	item->sector = ppn;
+	//pr_info("CSL : Invalidata ppn [%d]", ppn);
 	list_add_tail(&item->list_head, &dev->list);
+	/*pr_info("-------gc list data --------");
+	list_for_each_entry(item, &dev->list, list_head){
+			pr_info("gc data %u", item->sector);
+	}*/
 
-	// pr_info("CSL : Success to Invalidate [%d]", ppn);
 
 }
 
@@ -330,20 +340,24 @@ static void csl_read(uint ppn, void* buf, uint num_sec){
 }
 
 
-static void csl_write(uint ppn, void* buf, uint num_sec){
+static int csl_write(uint ppn, void* buf, uint num_sec){
 	uint nbytes = num_sec * SECTOR_SIZE;
 
-	if (ppn > DEV_SECTOR_NUM){
+	if (ppn >= DEV_SECTOR_NUM){
 		// garbage collection 수행
 		int ppn_new = csl_gc();
 		if(ppn_new < 0){
-			return;
+			pr_warn("CSL : There is no capacity in device");
+			return FAIL_EXIT;
 		}
+		//pr_info("CSL : Get new page [%d]",ppn_new);
 		memcpy(&data[ppn_new*SECTOR_SIZE], buf, nbytes);
+		return ppn_new; 
 	}
 
 	memcpy(&data[ppn*SECTOR_SIZE], buf, nbytes);
-	
+
+	return ppn;	
 }
 
 static int csl_open(struct gendisk *gdisk, fmode_t mode)
@@ -368,6 +382,9 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 	struct l2b_item* l2b_item;
 	void* ret;
 
+	unsigned int ppn_new; 
+	int final_ppn;
+
 	if(isWrite){
 		// start sec은 지금 logical address니까 PPN 변환이 필요
 		// pr_info("CSL : Start to Write");
@@ -375,43 +392,60 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 		
 		if(!ret){
 			// address_val이 NULL > 이미 쓰여있는 데이터가 없으므로 invalidate하지 않아도 괜찮음
+
+			ppn_new = dev->offset;
+
+			final_ppn = csl_write(ppn_new, buffer, num_sec);
+			if(final_ppn <0) return;
+
+			// write success	
 			l2b_item = kmalloc(sizeof(struct l2b_item), GFP_KERNEL);
-			
+
+			if(IS_ERR(l2b_item) || l2b_item == NULL){
+				pr_warn(MALLOC_ERROR_MSG);
+				return;
+			}
+
 			l2b_item->lba = start_sec;
-			l2b_item->ppn = dev->offset;
-			
-			// pr_info("CSL : Allocate New page!");
+			l2b_item->ppn = final_ppn;
+
 			xa_store(&dev->l2p_map, l2b_item->lba, (void*)l2b_item, GFP_KERNEL);
 
-			dev->offset+=num_sec;
-	
-			pr_info("CLS : Start write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
-			csl_write(l2b_item->ppn, buffer, num_sec);
-			// printk(KERN_INFO "CLS : Finish Write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
+			dev->offset += num_sec;
+
+			//pr_info("CLS : Start write LBA [%lu] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
+			
 			// display_index();
 		}
 
 		else{
 			// 이미 할당받았던 자리가 있음 > 그거 invalidate 해주기
 			l2b_item = (struct l2b_item*) ret;
-			csl_invalidate(l2b_item->ppn);
+			
+			unsigned int ppn_old = l2b_item->ppn;
+			ppn_new = dev->offset;
+			
+			final_ppn = csl_write(ppn_new, buffer, num_sec);
+			
+			if(final_ppn<0) return;
+			
+			l2b_item->ppn = final_ppn;
 
-			l2b_item->ppn = dev->offset; // 새로운 offset 할당
+			//display_index();
+
+			csl_invalidate(ppn_old);
+			dev->offset += num_sec;
 			
-			dev->offset+=num_sec;
-			
-			pr_info("CLS : Start write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
-			csl_write(l2b_item->ppn, buffer, num_sec);
-			// printk(KERN_INFO "CLS : Finish Write LBA [%d] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
-			// display_index();
+			//pr_info("CSL : Start write LBA [%lu] to PPN [%d]", l2b_item->lba, l2b_item->ppn);
+			//display_index();
+
 		}
 	}
 
 	else {
-		pr_info("CSL : Start to Read!");
+		//pr_info("CSL : Start to Read!");
 		ret = xa_load(&dev->l2p_map, start_sec);
-		if(!ret){
-			
+		if(IS_ERR(ret) || ret == NULL){
 			pr_warn("CSL : PAGE FAULT with sector num : %d",start_sec);
 			return;
 		}
@@ -426,11 +460,14 @@ static void csl_transfer(struct csl_dev *dev, unsigned int start_sec, unsigned i
 static void csl_get_request(struct request *rq)
 {
 	// request가 read, write인지 판별
+	if(rq==NULL){
+		return;
+	}
 	int isWrite = rq_data_dir(rq);
 
 	sector_t start_sector = blk_rq_pos(rq);
 	
-	// pr_info("CSL : Request | isWrite = [%d] | start_sector = [%d] | sector_length : [%d] | byte_length : [%d]",isWrite,start_sector, sector_len, byte_len);
+	//pr_info("CSL : Request | isWrite = [%d] | start_sector = [%d]",isWrite,start_sector);
 
 	struct bio_vec bvec;
 	struct req_iterator iter;
@@ -453,10 +490,12 @@ static void csl_get_request(struct request *rq)
 
 static blk_status_t csl_enqueue(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *data){
 	struct request *rq = data->rq;
-
+	
 	blk_mq_start_request(rq); // 커널에 device request를 시작한다고 알려주기 
 
+	//pr_info("get request start");
 	csl_get_request(rq);
+	//pr_info("get request finish");
 
 	blk_mq_end_request(rq, BLK_STS_OK);
 
@@ -580,7 +619,7 @@ static int __init csl_init(void)
 
 	csl_restore(dev);
 	
-	printk(KERN_INFO "DEVICE : CSL is successfully initialized with major number %d\n",CSL_MAJOR);
+	printk(KERN_INFO "DEVICE : CSL is successfully initialized with major number %d, SECTOR NUM : %d\n",CSL_MAJOR,DEV_SECTOR_NUM);
 	return 0;
 }
 

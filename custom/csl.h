@@ -35,6 +35,8 @@
 #define FILE_READ_ERROR_MSG "CSL : FAIL TO READ FILE"
 #define FILE_WRITE_ERROR_MSG "CSL : FAIL TO WRITE FILE"
 
+#define MALLOC_ERROR_MSG "CSL : FAIL TO MALLOC SPACE"
+
 #define BACKUP_FAIL_MSG "CSL : FAIL TO BACK UP CSL"
 
 // 여기서 block device 관련 데이터를 다 다룸 
